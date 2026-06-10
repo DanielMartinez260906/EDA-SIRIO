@@ -65,6 +65,119 @@ st.markdown("""
 
 st.markdown("---")
 
+# Función para unificar nombres de clientes similares (coincidencia exacta simplificada + búsqueda difusa)
+def unificar_nombres_clientes(df):
+    """
+    Unifica nombres de clientes similares en el DataFrame
+    usando normalización de caracteres y difflib.
+    """
+    # Encontrar la columna que representa al cliente (CV 1 o Cliente)
+    col_cliente = None
+    for col in df.columns:
+        col_lower = col.lower()
+        if col_lower == 'cliente' or col_lower == 'cv 1':
+            col_cliente = col
+            break
+    if not col_cliente:
+        for col in df.columns:
+            if 'cliente' in col.lower() or 'cv 1' in col.lower():
+                col_cliente = col
+                break
+                
+    if not col_cliente:
+        return df
+        
+    import unicodedata
+    from difflib import SequenceMatcher
+    
+    # Función auxiliar para simplificar texto (eliminar acentos, símbolos y espacios)
+    def simplificar_texto(texto):
+        if not isinstance(texto, str):
+            return ""
+        # Quitar acentos y diacríticos
+        texto = "".join(
+            c for c in unicodedata.normalize('NFD', texto)
+            if unicodedata.category(c) != 'Mn'
+        )
+        # Convertir a minúsculas y dejar solo caracteres alfanuméricos
+        return "".join(c.lower() for c in texto if c.isalnum())
+    
+    try:
+        # Obtener recuentos para saber cuál es el nombre más frecuente (canonical)
+        client_counts = df[col_cliente].value_counts()
+        unique_names = list(client_counts.index)
+        
+        # Mapeo de nombre original -> nombre unificado
+        unification_map = {}
+        
+        # 1. Agrupar por coincidencia exacta del texto simplificado
+        # Une Clinic pets con Clinicpets, DOG+CAT con Dog + Cat, etc.
+        simplified_groups = {}
+        for name in unique_names:
+            simp = simplificar_texto(name)
+            if not simp:
+                continue
+            if simp not in simplified_groups:
+                simplified_groups[simp] = []
+            simplified_groups[simp].append(name)
+        
+        # Para cada grupo de simplificación exacta, establecer el canonical (más frecuente)
+        exact_unified = {}
+        for simp, names in simplified_groups.items():
+            # Ordenar por frecuencia en el dataset (de mayor a menor)
+            names_sorted = sorted(names, key=lambda x: client_counts.get(x, 0), reverse=True)
+            canonical = names_sorted[0]
+            for name in names:
+                exact_unified[name] = canonical
+                
+        # 2. Búsqueda difusa (fuzzy) sobre los nombres canónicos simplificados
+        # Captura ligeros errores ortográficos (ej. Safari vs Safar)
+        canonicals = list(set(exact_unified.values()))
+        
+        # Calcular frecuencias agregadas de los nombres canónicos
+        canonical_freqs = {}
+        for name in canonicals:
+            origs = [k for k, v in exact_unified.items() if v == name]
+            canonical_freqs[name] = sum(client_counts.get(o, 0) for o in origs)
+            
+        # Ordenar canónicos por frecuencia acumulada descendente
+        canonicals_sorted = sorted(canonicals, key=lambda x: canonical_freqs.get(x, 0), reverse=True)
+        
+        # Mapeo inicial difuso (apunta a sí mismo por defecto)
+        fuzzy_map = {name: name for name in canonicals_sorted}
+        
+        # Comparar pares de nombres canónicos buscando similitudes ortográficas altas
+        for i in range(len(canonicals_sorted)):
+            name_i = canonicals_sorted[i]
+            simp_i = simplificar_texto(name_i)
+            
+            for j in range(i + 1, len(canonicals_sorted)):
+                name_j = canonicals_sorted[j]
+                simp_j = simplificar_texto(name_j)
+                
+                # Calcular similitud entre los nombres simplificados
+                ratio = SequenceMatcher(None, simp_i, simp_j).ratio()
+                
+                # Si la similitud es alta (>= 0.85), unificamos el menos frecuente al más frecuente
+                if ratio >= 0.85:
+                    if fuzzy_map[name_j] == name_j:
+                        fuzzy_map[name_j] = fuzzy_map[name_i]
+                        
+        # Mapear cada nombre original al canónico difuso final
+        final_map = {}
+        for name in unique_names:
+            exact_canon = exact_unified.get(name, name)
+            final_canon = fuzzy_map.get(exact_canon, exact_canon)
+            final_map[name] = final_canon
+            
+        # Aplicar la unificación al DataFrame
+        df[col_cliente] = df[col_cliente].map(final_map).fillna(df[col_cliente])
+    except Exception as e:
+        print(f"Error en unificación de clientes: {e}")
+        
+    return df
+
+
 # Función para limpiar y normalizar los datos
 def limpiar_dataframe(df):
     """
@@ -98,6 +211,9 @@ def limpiar_dataframe(df):
                     df[col] = df[col].str.title()
                 except:
                     pass
+        
+        # Unificar nombres de clientes similares (coincidencia exacta simplificada + búsqueda difusa)
+        df = unificar_nombres_clientes(df)
         
         return df
     except Exception as e:
