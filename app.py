@@ -23,6 +23,41 @@ st.set_page_config(
     layout=PAGE_LAYOUT
 )
 
+# Evitar que el traductor del navegador (Google Translate, etc.) interfiera y rompa React (removeChild error)
+import streamlit.components.v1 as components
+components.html("""
+    <script>
+        try {
+            // Modificar el documento principal para desactivar la traducción automática
+            const parentDoc = window.parent.document;
+            
+            parentDoc.documentElement.setAttribute('translate', 'no');
+            parentDoc.documentElement.classList.add('notranslate');
+            
+            parentDoc.body.setAttribute('translate', 'no');
+            parentDoc.body.classList.add('notranslate');
+            
+            // Añadir etiquetas meta de no traducción
+            if (!parentDoc.querySelector('meta[name="google"][content="notranslate"]')) {
+                const meta1 = parentDoc.createElement('meta');
+                meta1.name = 'google';
+                meta1.content = 'notranslate';
+                parentDoc.head.appendChild(meta1);
+            }
+            
+            if (!parentDoc.querySelector('meta[name="googlebot"][content="notranslate"]')) {
+                const meta2 = parentDoc.createElement('meta');
+                meta2.name = 'googlebot';
+                meta2.content = 'notranslate';
+                parentDoc.head.appendChild(meta2);
+            }
+            console.log("Traducción automática desactivada con éxito.");
+        } catch (e) {
+            console.warn("No se pudo desactivar traducción automática en el documento principal (posible restricción CORS):", e);
+        }
+    </script>
+""", height=0)
+
 # Estilos y título
 st.markdown("""
     <h1 style='text-align: center; color: #1f77b4;'>🧬 Análisis de Datos - Laboratorio Microbiología Veterinaria</h1>
