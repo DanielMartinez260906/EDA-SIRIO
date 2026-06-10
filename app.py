@@ -68,7 +68,7 @@ st.markdown("---")
 # Función para limpiar y normalizar los datos
 def limpiar_dataframe(df):
     """
-    Limpia el DataFrame: elimina espacios, maneja NaN y booleanos
+    Limpia el DataFrame: elimina espacios, maneja NaN y normaliza texto
     """
     try:
         # Reemplazar todos los NaN y valores vacíos con strings vacíos
@@ -78,19 +78,32 @@ def limpiar_dataframe(df):
         for col in df.columns:
             df[col] = df[col].astype(str)
         
-        # Limpiar espacios en valores de texto (no cambiar nombres de columnas aquí)
+        # Limpiar espacios en valores de texto
         for col in df.columns:
             try:
+                # Eliminar espacios y unificar espacios dobles/múltiples
                 df[col] = df[col].str.strip()
+                df[col] = df[col].str.replace(r'\s+', ' ', regex=True)
                 # Reemplazar "none", "nan", etc. con vacío
                 df[col] = df[col].replace(["None", "nan", "<NA>", "NaN", "none"], "")
             except:
                 pass
         
+        # Normalizar mayúsculas/minúsculas para columnas clave (clientes, especies, exámenes)
+        for col in df.columns:
+            col_lower = col.lower()
+            if any(key in col_lower for key in ['cliente', 'especie', 'examen', 'cv 1', 'exámenes']):
+                try:
+                    # Convertir a formato Título (ej: Safari, Clinic Pets, Catper)
+                    df[col] = df[col].str.title()
+                except:
+                    pass
+        
         return df
     except Exception as e:
         print(f"Error al limpiar dataframe: {e}")
         return df
+
 
 # Función para conectar con Google Sheets
 @st.cache_data
