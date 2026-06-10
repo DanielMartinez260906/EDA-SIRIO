@@ -422,58 +422,111 @@ if 'Cliente' in df.columns and 'Examen' in df.columns:
             st.dataframe(df_clientes_counts, use_container_width=True)
             
             # 2. Configurar y mostrar el Heatmap filtrado por clientes más activos
-            st.subheader("🔥 Heatmap de Incidencia: Clientes Más Activos vs Exámenes")
-            st.markdown("Visualiza la relación de exámenes solicitados únicamente por los clientes con mayor volumen de registros.")
+            st.subheader("🔥 Heatmap de Incidencia: Clientes Más Activos vs Exámenes Frecuentes")
+            st.markdown("Visualiza la relación entre tus clientes principales y los exámenes más solicitados. Los datos se ordenan de mayor a menor frecuencia.")
             
-            # Determinar dinámicamente el rango del control de Top Clientes
+            # Determinar dinámicamente los límites para los selectores/sliders
             num_clientes_unicos = len(df_clientes_counts)
-            max_slider = min(30, num_clientes_unicos)
-            default_slider = min(10, num_clientes_unicos)
+            max_slider_cli = min(30, num_clientes_unicos)
+            default_slider_cli = min(10, num_clientes_unicos)
             
-            if num_clientes_unicos > 5:
-                top_n = st.slider(
-                    "Selecciona la cantidad de Top Clientes a visualizar en el Heatmap:",
-                    min_value=5,
-                    max_value=max_slider,
-                    value=default_slider,
-                    key="heatmap_top_n"
-                )
-            else:
-                top_n = num_clientes_unicos
-                
-            # Obtener nombres de los top N clientes
+            # Contar la frecuencia de cada examen
+            examenes_counts = df_matriz['Examen'].value_counts()
+            num_examenes_unicos = len(examenes_counts)
+            max_slider_exam = min(30, num_examenes_unicos)
+            default_slider_exam = min(10, num_examenes_unicos)
+            
+            # Mostrar sliders en dos columnas para una interfaz limpia
+            col_slider1, col_slider2 = st.columns(2)
+            
+            with col_slider1:
+                if num_clientes_unicos > 5:
+                    top_n = st.slider(
+                        "Cantidad de Clientes más activos a mostrar:",
+                        min_value=5,
+                        max_value=max_slider_cli,
+                        value=default_slider_cli,
+                        key="heatmap_top_n"
+                    )
+                else:
+                    top_n = num_clientes_unicos
+                    
+            with col_slider2:
+                if num_examenes_unicos > 5:
+                    top_m = st.slider(
+                        "Cantidad de Exámenes más solicitados a mostrar:",
+                        min_value=5,
+                        max_value=max_slider_exam,
+                        value=default_slider_exam,
+                        key="heatmap_top_m"
+                    )
+                else:
+                    top_m = num_examenes_unicos
+            
+            # Obtener nombres de los top N clientes y top M exámenes
             top_clientes = df_clientes_counts.head(top_n)['Cliente'].tolist()
+            top_examenes = examenes_counts.head(top_m).index.tolist()
             
-            # Filtrar el DataFrame de la matriz para los clientes seleccionados
-            df_matriz_top = df_matriz[df_matriz['Cliente'].isin(top_clientes)].copy()
+            # Filtrar el DataFrame para incluir solo estos clientes y exámenes
+            df_matriz_top = df_matriz[
+                (df_matriz['Cliente'].isin(top_clientes)) & 
+                (df_matriz['Examen'].isin(top_examenes))
+            ].copy()
             
             if len(df_matriz_top) > 0:
-                # Crear la tabla de incidencia cruzada
+                # Crear un mapeo de nombres originales a truncados compactos para evitar el traslape en el eje X
+                mapeo_nombres = {}
+                for i, nombre in enumerate(top_examenes):
+                    # Truncar a 22 caracteres (aprox. 3 palabras o menos)
+                    truncado = nombre[:22] + "..." if len(nombre) > 25 else nombre
+                    # Resolver posibles colisiones
+                    suffix = 1
+                    original_truncado = truncado
+                    while truncado in mapeo_nombres.values():
+                        suffix += 1
+                        truncado = f"{original_truncado[:18]}... ({suffix})"
+                    mapeo_nombres[nombre] = truncado
+                
+                # Guardar nombres originales para el tooltip (hover) de Plotly
+                columnas_ordenadas = [mapeo_nombres[x] for x in top_examenes]
+                
+                # Mapear nombres en la columna 'Examen'
+                df_matriz_top['Examen'] = df_matriz_top['Examen'].map(mapeo_nombres)
+                
+                # Crear la tabla de incidencia cruzada (crosstab)
                 matriz_cliente_examen = pd.crosstab(df_matriz_top['Cliente'], df_matriz_top['Examen'])
                 
-                # Reordenar las filas para que vayan de más activos a menos activos
-                matriz_cliente_examen = matriz_cliente_examen.reindex(top_clientes)
+                # Reordenar las filas (clientes) y columnas (exámenes) por orden de popularidad
+                matriz_cliente_examen = matriz_cliente_examen.reindex(index=top_clientes, columns=columnas_ordenadas, fill_value=0)
                 
-                # Excluir exámenes (columnas) que tengan cero solicitudes entre este grupo de clientes top
-                matriz_cliente_examen = matriz_cliente_examen.loc[:, (matriz_cliente_examen != 0).any(axis=0)]
+                # Preparar los datos originales para el hover (Tooltip interactivo)
+                customdata_list = [top_examenes for _ in range(len(matriz_cliente_examen))]
                 
                 if not matriz_cliente_examen.empty:
                     fig_heatmap = px.imshow(
                         matriz_cliente_examen,
-                        labels=dict(x='Tipo de Examen', y='Cliente', color='Solicitudes'),
-                        title=f'Heatmap: Top {top_n} Clientes vs Exámenes Solicitados',
+                        labels=dict(x='Tipo de Examen (Abreviado)', y='Cliente', color='Solicitudes'),
+                        title=f'Heatmap de Incidencia: Top {top_n} Clientes vs Top {top_m} Exámenes',
                         color_continuous_scale='YlOrRd',
-                        text_auto=True  # Muestra el número dentro de la celda
+                        text_auto=True
                     )
+                    
+                    # Personalizar el hover para mostrar el nombre original completo
+                    fig_heatmap.update_traces(
+                        customdata=customdata_list,
+                        hovertemplate="<b>Cliente:</b> %{y}<br><b>Examen completo:</b> %{customdata}<br><b>Solicitudes:</b> %{z}<extra></extra>"
+                    )
+                    
                     fig_heatmap.update_layout(
-                        height=500,
-                        xaxis_tickangle=-45
+                        height=450 + (top_n * 15), # Escala dinámicamente el alto según el número de clientes
+                        xaxis_tickangle=-45,
+                        margin=dict(l=150, r=20, t=50, b=150) # Espacio para que las etiquetas largas no se corten
                     )
                     st.plotly_chart(fig_heatmap, use_container_width=True)
                 else:
                     st.info("No hay datos cruzados suficientes para graficar.")
             else:
-                st.info("No se encontraron registros para los clientes seleccionados.")
+                st.info("No se encontraron registros para los clientes y exámenes seleccionados.")
         else:
             st.info("No hay datos de clientes y exámenes válidos.")
     except Exception as e:
