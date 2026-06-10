@@ -68,8 +68,7 @@ st.markdown("---")
 # Función para unificar nombres de clientes similares (coincidencia exacta simplificada + búsqueda difusa)
 def unificar_nombres_clientes(df):
     """
-    Unifica nombres de clientes similares en el DataFrame
-    usando normalización de caracteres y difflib.
+    Unifica nombres de clientes similares, sucursales y variaciones de escritura en el DataFrame.
     """
     # Encontrar la columna que representa al cliente (CV 1 o Cliente)
     col_cliente = None
@@ -88,92 +87,92 @@ def unificar_nombres_clientes(df):
         return df
         
     import unicodedata
+    import re
     from difflib import SequenceMatcher
     
-    # Función auxiliar para simplificar texto (eliminar acentos, símbolos y espacios)
-    def simplificar_texto(texto):
-        if not isinstance(texto, str):
+    # Función para obtener el "núcleo" de un nombre removiendo palabras genéricas veterinarias y nexos comunes
+    def obtener_nombre_nucleo(nombre):
+        if not isinstance(nombre, str):
             return ""
-        # Quitar acentos y diacríticos
-        texto = "".join(
-            c for c in unicodedata.normalize('NFD', texto)
+        # Remover acentos y pasar a minúsculas
+        nombre_clean = "".join(
+            c for c in unicodedata.normalize('NFD', nombre)
             if unicodedata.category(c) != 'Mn'
-        )
-        # Convertir a minúsculas y dejar solo caracteres alfanuméricos
-        return "".join(c.lower() for c in texto if c.isalnum())
-    
+        ).lower()
+        # Reemplazar caracteres no alfanuméricos con espacios
+        nombre_clean = re.sub(r'[^a-z0-9\s]', ' ', nombre_clean)
+        # Dividir en palabras y remover palabras genéricas
+        palabras = nombre_clean.split()
+        palabras_filtradas = [
+            p for p in palabras 
+            if p not in {
+                'clinica', 'clinic', 'veterinaria', 'veterinario', 'hospital', 
+                'consultorio', 'centro', 'vet', 'cvh', 'dr', 'dra', 
+                'de', 'del', 'y', 'la', 'las', 'el', 'los', 'un', 'una', 'con', 'en'
+            }
+        ]
+        return "".join(palabras_filtradas)
+
     try:
-        # Obtener recuentos para saber cuál es el nombre más frecuente (canonical)
+        # Obtener los recuentos de frecuencia para determinar la jerarquía de los nombres
         client_counts = df[col_cliente].value_counts()
         unique_names = list(client_counts.index)
         
-        # Mapeo de nombre original -> nombre unificado
-        unification_map = {}
+        # Guardar los núcleos de cada nombre único para las comparaciones
+        core_names = {name: obtener_nombre_nucleo(name) for name in unique_names}
         
-        # 1. Agrupar por coincidencia exacta del texto simplificado
-        # Une Clinic pets con Clinicpets, DOG+CAT con Dog + Cat, etc.
-        simplified_groups = {}
-        for name in unique_names:
-            simp = simplificar_texto(name)
-            if not simp:
+        # Mapeo inicial: cada nombre apunta a sí mismo
+        unification_map = {name: name for name in unique_names}
+        
+        # Iterar de mayor a menor frecuencia para encontrar grupos de unificación
+        for i in range(len(unique_names)):
+            name_i = unique_names[i]
+            # Si este nombre ya fue unificado en uno más frecuente, lo ignoramos como base
+            if unification_map[name_i] != name_i:
                 continue
-            if simp not in simplified_groups:
-                simplified_groups[simp] = []
-            simplified_groups[simp].append(name)
-        
-        # Para cada grupo de simplificación exacta, establecer el canonical (más frecuente)
-        exact_unified = {}
-        for simp, names in simplified_groups.items():
-            # Ordenar por frecuencia en el dataset (de mayor a menor)
-            names_sorted = sorted(names, key=lambda x: client_counts.get(x, 0), reverse=True)
-            canonical = names_sorted[0]
-            for name in names:
-                exact_unified[name] = canonical
                 
-        # 2. Búsqueda difusa (fuzzy) sobre los nombres canónicos simplificados
-        # Captura ligeros errores ortográficos (ej. Safari vs Safar)
-        canonicals = list(set(exact_unified.values()))
-        
-        # Calcular frecuencias agregadas de los nombres canónicos
-        canonical_freqs = {}
-        for name in canonicals:
-            origs = [k for k, v in exact_unified.items() if v == name]
-            canonical_freqs[name] = sum(client_counts.get(o, 0) for o in origs)
-            
-        # Ordenar canónicos por frecuencia acumulada descendente
-        canonicals_sorted = sorted(canonicals, key=lambda x: canonical_freqs.get(x, 0), reverse=True)
-        
-        # Mapeo inicial difuso (apunta a sí mismo por defecto)
-        fuzzy_map = {name: name for name in canonicals_sorted}
-        
-        # Comparar pares de nombres canónicos buscando similitudes ortográficas altas
-        for i in range(len(canonicals_sorted)):
-            name_i = canonicals_sorted[i]
-            simp_i = simplificar_texto(name_i)
-            
-            for j in range(i + 1, len(canonicals_sorted)):
-                name_j = canonicals_sorted[j]
-                simp_j = simplificar_texto(name_j)
+            core_i = core_names[name_i]
+            if not core_i:
+                continue
                 
-                # Calcular similitud entre los nombres simplificados
-                ratio = SequenceMatcher(None, simp_i, simp_j).ratio()
+            for j in range(i + 1, len(unique_names)):
+                name_j = unique_names[j]
+                # Si name_j ya fue re-mapeado a algo más popular, lo saltamos
+                if unification_map[name_j] != name_j:
+                    continue
+                    
+                core_j = core_names[name_j]
+                if not core_j:
+                    continue
                 
-                # Si la similitud es alta (>= 0.85), unificamos el menos frecuente al más frecuente
-                if ratio >= 0.85:
-                    if fuzzy_map[name_j] == name_j:
-                        fuzzy_map[name_j] = fuzzy_map[name_i]
-                        
-        # Mapear cada nombre original al canónico difuso final
-        final_map = {}
-        for name in unique_names:
-            exact_canon = exact_unified.get(name, name)
-            final_canon = fuzzy_map.get(exact_canon, exact_canon)
-            final_map[name] = final_canon
-            
-        # Aplicar la unificación al DataFrame
-        df[col_cliente] = df[col_cliente].map(final_map).fillna(df[col_cliente])
+                # Regla 1: Coincidencia exacta de núcleos (ej. "Caninos Y Felinos Hospital" == "Caninos Y Felinos")
+                if core_i == core_j:
+                    unification_map[name_j] = name_i
+                    continue
+                    
+                # Regla 2: El núcleo más corto es subcadena del más largo (ej. "caninosfelinos" en "caninosfelinosvelodromo")
+                # Exigimos una longitud mínima del núcleo de 5 caracteres para evitar falsos positivos con nombres muy cortos
+                if len(core_i) >= 5 and core_i in core_j:
+                    unification_map[name_j] = name_i
+                    continue
+                    
+                # Regla 3: Comparación difusa del núcleo (tolerancia del 82% de similitud)
+                ratio = SequenceMatcher(None, core_i, core_j).ratio()
+                if ratio >= 0.82:
+                    unification_map[name_j] = name_i
+                    continue
+                    
+                # Regla 4: El nombre original (sin espacios) más corto es subcadena del más largo
+                name_i_clean = name_i.lower().replace(" ", "")
+                name_j_clean = name_j.lower().replace(" ", "")
+                if len(name_i_clean) >= 5 and name_i_clean in name_j_clean:
+                    unification_map[name_j] = name_i
+                    continue
+
+        # Aplicar el mapa al DataFrame
+        df[col_cliente] = df[col_cliente].map(unification_map).fillna(df[col_cliente])
     except Exception as e:
-        print(f"Error en unificación de clientes: {e}")
+        print(f"Error en unificación avanzada de clientes: {e}")
         
     return df
 
