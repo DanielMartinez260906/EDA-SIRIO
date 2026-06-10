@@ -400,7 +400,7 @@ else:
 
 st.markdown("---")
 
-# ============ SECCIÓN 4: MATRIZ DE CLIENTES vs EXÁMENES ============
+# ============ SECCIÓN 4: MATRIZ DE RELACIÓN: CLIENTES vs EXÁMENES ============
 st.header("🔗 4. Matriz de Relación: Clientes vs Exámenes")
 
 if 'Cliente' in df.columns and 'Examen' in df.columns:
@@ -409,28 +409,75 @@ if 'Cliente' in df.columns and 'Examen' in df.columns:
         df_matriz = df[(df['Cliente'] != "") & (df['Examen'] != "")].copy()
         
         if len(df_matriz) > 0:
-            # Crear tabla cruzada
-            matriz_cliente_examen = pd.crosstab(df_matriz['Cliente'], df_matriz['Examen'])
-
-            st.subheader("Número de exámenes por cliente (matriz de incidencia)")
-            st.dataframe(matriz_cliente_examen, use_container_width=True)
-
-            # Heatmap
-            if len(matriz_cliente_examen) > 0:
-                fig_heatmap = px.imshow(
-                    matriz_cliente_examen,
-                    labels=dict(x='Tipo de Examen', y='Cliente', color='Solicitudes'),
-                    title='Heatmap: Clientes vs Exámenes',
-                    color_continuous_scale='YlOrRd'
+            # 1. Mostrar clientes con cantidad de registros
+            st.subheader("👥 Clientes por Número de Registros")
+            
+            # Calcular registros por cliente
+            df_clientes_counts = df_matriz['Cliente'].value_counts().reset_index()
+            df_clientes_counts.columns = ['Cliente', 'Cantidad de Registros']
+            total_registros = df_clientes_counts['Cantidad de Registros'].sum()
+            df_clientes_counts['Porcentaje %'] = ((df_clientes_counts['Cantidad de Registros'] / total_registros) * 100).round(1)
+            
+            # Mostrar la tabla resumida sin ceros redundantes
+            st.dataframe(df_clientes_counts, use_container_width=True)
+            
+            # 2. Configurar y mostrar el Heatmap filtrado por clientes más activos
+            st.subheader("🔥 Heatmap de Incidencia: Clientes Más Activos vs Exámenes")
+            st.markdown("Visualiza la relación de exámenes solicitados únicamente por los clientes con mayor volumen de registros.")
+            
+            # Determinar dinámicamente el rango del control de Top Clientes
+            num_clientes_unicos = len(df_clientes_counts)
+            max_slider = min(30, num_clientes_unicos)
+            default_slider = min(10, num_clientes_unicos)
+            
+            if num_clientes_unicos > 5:
+                top_n = st.slider(
+                    "Selecciona la cantidad de Top Clientes a visualizar en el Heatmap:",
+                    min_value=5,
+                    max_value=max_slider,
+                    value=default_slider,
+                    key="heatmap_top_n"
                 )
-                fig_heatmap.update_layout(height=400)
-                st.plotly_chart(fig_heatmap, use_container_width=True)
             else:
-                st.info("No hay datos suficientes para mostrar el heatmap")
+                top_n = num_clientes_unicos
+                
+            # Obtener nombres de los top N clientes
+            top_clientes = df_clientes_counts.head(top_n)['Cliente'].tolist()
+            
+            # Filtrar el DataFrame de la matriz para los clientes seleccionados
+            df_matriz_top = df_matriz[df_matriz['Cliente'].isin(top_clientes)].copy()
+            
+            if len(df_matriz_top) > 0:
+                # Crear la tabla de incidencia cruzada
+                matriz_cliente_examen = pd.crosstab(df_matriz_top['Cliente'], df_matriz_top['Examen'])
+                
+                # Reordenar las filas para que vayan de más activos a menos activos
+                matriz_cliente_examen = matriz_cliente_examen.reindex(top_clientes)
+                
+                # Excluir exámenes (columnas) que tengan cero solicitudes entre este grupo de clientes top
+                matriz_cliente_examen = matriz_cliente_examen.loc[:, (matriz_cliente_examen != 0).any(axis=0)]
+                
+                if not matriz_cliente_examen.empty:
+                    fig_heatmap = px.imshow(
+                        matriz_cliente_examen,
+                        labels=dict(x='Tipo de Examen', y='Cliente', color='Solicitudes'),
+                        title=f'Heatmap: Top {top_n} Clientes vs Exámenes Solicitados',
+                        color_continuous_scale='YlOrRd',
+                        text_auto=True  # Muestra el número dentro de la celda
+                    )
+                    fig_heatmap.update_layout(
+                        height=500,
+                        xaxis_tickangle=-45
+                    )
+                    st.plotly_chart(fig_heatmap, use_container_width=True)
+                else:
+                    st.info("No hay datos cruzados suficientes para graficar.")
+            else:
+                st.info("No se encontraron registros para los clientes seleccionados.")
         else:
-            st.info("No hay datos de clientes y exámenes válidos")
+            st.info("No hay datos de clientes y exámenes válidos.")
     except Exception as e:
-        st.error(f"Error al procesar matriz: {e}")
+        st.error(f"Error al procesar la matriz: {e}")
 else:
     st.warning("⚠️ Faltan columnas 'Cliente' o 'Examen' para esta sección")
 
